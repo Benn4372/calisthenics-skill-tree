@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Calisthenics Skill Tree</title>
+  <meta name="description" content="Track calisthenics progressions from push-ups to planche, front lever and back lever.">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1>Calisthenics Skill Tree</h1>
+    <div class="stats" id="stats" aria-live="polite"></div>
+    <div class="actions">
+      <label class="toggle"><input type="checkbox" id="toggleCarry" checked> Carryover links</label>
+      <button type="button" id="btnFit">Fit</button>
+      <button type="button" id="btnExport">Export</button>
+      <button type="button" id="btnImport">Import</button>
+      <input type="file" id="fileImport" accept="application/json,.json" hidden>
+      <button type="button" id="btnReset" class="danger">Reset</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <div class="canvas" id="canvas">
+      <svg id="tree" xmlns="http://www.w3.org/2000/svg" aria-label="Skill tree">
+        <g id="viewport">
+          <g id="bands"></g>
+          <g id="edges"></g>
+          <g id="nodes"></g>
+        </g>
+      </svg>
+      <div class="zoom">
+        <button type="button" id="zoomIn" aria-label="Zoom in">+</button>
+        <button type="button" id="zoomOut" aria-label="Zoom out">&minus;</button>
+      </div>
+    </div>
+    <aside class="panel" id="panel"></aside>
+  </main>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script src="js/data.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
