@@ -1,6 +1,6 @@
 # Calisthenics Skill Tree
 
-An interactive skill tree for bodyweight training. It shows progressions within each skill family (push, pull, planche, front lever, back lever, handstand and more) and how the families feed into each other.
+An interactive skill tree for bodyweight training. It grows from a single Start node into five branches (Legs, Push, Balance, Core and Pull). It shows the progressions along each branch, such as push-ups to planche or pull-ups to front lever, and how the branches feed into each other.
 
 **Live site:** https://benn4372.github.io/calisthenics-skill-tree/
 
@@ -8,11 +8,12 @@ It's a static site with no build step and no dependencies, so it runs on GitHub 
 
 ## How it works
 
-- **Columns** are skill families. **Nodes** are skills, laid out top to bottom by difficulty.
-- **Each skill has levels.** Level 1 is the bare minimum ("can do it"). Later levels are the reps or hold times that build toward the next skill. Completing every level marks a skill as mastered.
-- **Solid lines** are hard prerequisites at a specific level. For example, Pseudo planche push-up requires Push-up at *10 reps*. A line turns green once you've met it.
+- **The tree grows upward.** Start sits at the bottom. It splits into five branch bases, and each skill grows out of the one below it. Higher up means more prerequisites deep.
+- **Each skill is a circle with a progress ring.** The ring has one segment per level. Level 1 is the bare minimum ("can do it"). Later levels are the reps or hold times that build toward the next skill. Filling every segment marks the skill as mastered.
+- **Thick coloured lines** are the branches themselves. Each one is a prerequisite at a specific level: for example, Pseudo planche push-up grows out of Push-up and needs *10 reps*. A branch line lights up once the skill it leads to is unlocked.
+- **Thin lines** are extra prerequisites, often from another branch. For example, Tuck front lever grows on the Pull branch but also needs a Hollow body hold from Core.
 - **Dashed lines** are carryover: the skill helps with another but isn't required (for example, back lever work helping planche). You can hide these with the toggle.
-- Click a skill to log your level, see what it requires and what each level unlocks. Selecting a skill also highlights its full prerequisite chain.
+- **Click a skill** to log your level and see what it requires and what each level unlocks. Selecting a skill highlights its full route back to Start. Clicking a branch base lists that branch's skills and progress. Clicking Start shows the overview.
 
 Progress is stored in the browser's `localStorage`, so it's per browser and per device. Use **Export** and **Import** to back it up or move it.
 
@@ -35,20 +36,22 @@ Then visit http://localhost:8000.
 
 ## Editing the tree
 
-All skills live in [`js/data.js`](js/data.js). Each skill looks like this:
+Branches and skills live in [`js/data.js`](js/data.js). Each skill looks like this:
 
 ```js
-{ id: 'pppu', name: 'Pseudo planche push-up', family: 'push',
+{ id: 'pppu', name: 'Pseudo planche push-up', branch: 'push',
   tiers: ['1 rep', '5 reps', '10 reps'],
   requires: [['pushup', 3]],      // needs Push-up at its 3rd level (10 reps)
   carry: ['planche_lean'],        // Planche lean helps with this one
   cue: 'Hands by the hips, fingers turned out, lean forward the whole rep.' }
 ```
 
+- `branch`: which branch it grows on (`legs`, `push`, `balance`, `core` or `pull`).
 - `tiers`: levels from easiest to hardest. The first is "can do it" and the last is mastered.
-- `requires`: `[skillId, level]` pairs. The level number is 1-based into that skill's `tiers`.
+- `requires`: `[skillId, level]` pairs. The level number is 1-based into that skill's `tiers`. The first prerequisite on the same branch is the skill this one grows out of (the thick line). Any others become thin cross-links. With no same-branch prerequisite, the skill grows straight from the branch base.
+- `parent` (optional): overrides which skill it grows out of.
 - `carry`: skills that help with this one but aren't required.
-- Rows are computed from the prerequisites, so you don't position anything by hand.
+- Positions are computed automatically. Height comes from prerequisite depth and spread comes from the tree shape, so you don't position anything by hand. Within a branch, skills appear left to right in the order they're listed.
 - Problems such as unknown skill IDs or out-of-range levels are reported as warnings in the browser console.
 
 Don't rename an existing `id` unless you're fine losing saved progress for that skill. Saved progress is keyed by `id`.

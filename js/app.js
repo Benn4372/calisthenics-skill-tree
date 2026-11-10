@@ -6,34 +6,53 @@
   const PREFS_KEY = 'calisthenics-skill-tree:prefs';
   const SVGNS = 'http://www.w3.org/2000/svg';
 
-  const NODE_W = 184;
-  const NODE_H = 60;
-  const COL_W = 232;
-  const ROW_H = 100;
-  const PAD_X = 32;
-  const HEADER_H = 70;
-  const MIN_K = 0.2;
+  // Geometry
+  const UNIT = 112;          // horizontal spacing between neighbouring leaves
+  const BRANCH_GAP = 0.6;    // extra spacing between branches, in units
+  const ROW = 116;           // vertical spacing per difficulty level
+  const ROOT_DROP = 240;     // Start sits this far below the branch bases
+  const R = { skill: 25, hub: 36, root: 44 };
+  const RING_GAP = 6;        // gap between disc and progress ring
+  const RING_W = 6;          // progress ring thickness
+  const MARGIN_X = 80;
+  const MARGIN_TOP = 70;
+  const MARGIN_BOTTOM = 90;
+  const MIN_K = 0.15;
   const MAX_K = 2.5;
 
   // ------------------------------------------------------------------
-  // Data model
+  // Data model: root -> branch hubs -> skills
   // ------------------------------------------------------------------
-  const families = DATA.families.map((f, i) => ({ ...f, index: i }));
-  const famById = new Map(families.map(f => [f.id, f]));
+  const ROOT_ID = '_root';
+  const root = {
+    id: ROOT_ID, kind: 'root', name: (DATA.root && DATA.root.name) || 'Start',
+    children: [], level: 0
+  };
+  const hubs = DATA.branches.map(b => ({
+    id: 'hub:' + b.id, kind: 'hub', branch: b.id, name: b.name, color: b.color,
+    blurb: b.blurb || '', children: [], parent: root, level: 1
+  }));
+  root.children = hubs.slice();
+  const hubByBranch = new Map(hubs.map(hb => [hb.branch, hb]));
+
   const skills = DATA.skills.map(s => ({
     ...s,
+    kind: 'skill',
     requires: s.requires || [],
     carry: s.carry || [],
     unlocks: [],     // [skillId, tierNeededFromThisSkill]
-    carriesTo: []    // skillIds this one helps with
+    carriesTo: [],   // skillIds this one helps with
+    children: []
   }));
   const byId = new Map(skills.map(s => [s.id, s]));
+  const nodeById = new Map([[ROOT_ID, root], ...hubs.map(hb => [hb.id, hb]), ...skills.map(s => [s.id, s])]);
 
   skills.forEach(s => {
-    if (!famById.has(s.family)) {
-      console.warn(`Skill "${s.id}" has unknown family "${s.family}"`);
-      s.family = families[0].id;
+    if (!hubByBranch.has(s.branch)) {
+      console.warn(`Skill "${s.id}" has unknown branch "${s.branch}"`);
+      s.branch = hubs[0].branch;
     }
+    s.color = hubByBranch.get(s.branch).color;
     s.requires = s.requires.filter(([pid, tier]) => {
       const p = byId.get(pid);
       if (!p) { console.warn(`Skill "${s.id}" requires unknown skill "${pid}"`); return false; }
@@ -52,44 +71,78 @@
     });
   });
 
+  // Tree parent: explicit `parent`, else first same-branch prerequisite, else the branch hub.
+  skills.forEach(s => {
+    let parent = null;
+    if (s.parent) {
+      parent = byId.get(s.parent) || null;
+      if (!parent) console.warn(`Skill "${s.id}" has unknown parent "${s.parent}"`);
+    }
+    if (!parent) {
+      const req = s.requires.find(([pid]) => byId.get(pid).branch === s.branch);
+      parent = req ? byId.get(req[0]) : hubByBranch.get(s.branch);
+    }
+    s.parent = parent;
+  });
+  // Guard against parent cycles (bad `parent` overrides): fall back to the hub.
+  skills.forEach(s => {
+    const seen = new Set([s.id]);
+    let p = s.parent;
+    while (p && p.kind === 'skill') {
+      if (seen.has(p.id)) {
+        console.warn(`Parent cycle at "${s.id}"`);
+        s.parent = hubByBranch.get(s.branch);
+        break;
+      }
+      seen.add(p.id);
+      p = p.parent;
+    }
+  });
+  skills.forEach(s => s.parent.children.push(s));
+
+  // The tree-edge prerequisite (if the parent is a skill) vs cross-links.
+  skills.forEach(s => {
+    s.parentReq = s.parent.kind === 'skill' ? s.requires.find(([pid]) => pid === s.parent.id) || null : null;
+    s.crossReqs = s.requires.filter(r => r !== s.parentReq);
+  });
+
   // ------------------------------------------------------------------
-  // Layout: one column per family, rows from prerequisite depth
+  // Layout: height = difficulty level, spread = tree shape
   // ------------------------------------------------------------------
-  const depthMemo = new Map();
-  function depth(s, stack) {
-    if (depthMemo.has(s.id)) return depthMemo.get(s.id);
-    if (stack.has(s.id)) { console.warn(`Prerequisite cycle at "${s.id}"`); return 0; }
+  const levelMemo = new Map();
+  function levelOf(s, stack) {
+    if (levelMemo.has(s.id)) return levelMemo.get(s.id);
+    if (stack.has(s.id)) { console.warn(`Prerequisite cycle at "${s.id}"`); return 2; }
     stack.add(s.id);
-    let d = 0;
-    s.requires.forEach(([pid]) => { d = Math.max(d, depth(byId.get(pid), stack) + 1); });
+    let lv = s.parent.kind === 'skill' ? levelOf(s.parent, stack) + 1 : 2;
+    s.requires.forEach(([pid]) => { lv = Math.max(lv, levelOf(byId.get(pid), stack) + 1); });
     stack.delete(s.id);
-    depthMemo.set(s.id, d);
-    return d;
+    levelMemo.set(s.id, lv);
+    return lv;
   }
+  skills.forEach(s => { s.level = levelOf(s, new Set()); });
+  const maxLevel = Math.max(...skills.map(s => s.level));
 
-  const occupied = new Set();
-  let maxRow = 0;
-  skills
-    .map((s, i) => ({ s, i, d: depth(s, new Set()) }))
-    .sort((a, b) => a.d - b.d || a.i - b.i)
-    .forEach(({ s }) => {
-      let r = 0;
-      s.requires.forEach(([pid]) => {
-        const p = byId.get(pid);
-        if (p.row !== undefined) r = Math.max(r, p.row + 1);
-      });
-      const col = famById.get(s.family).index;
-      while (occupied.has(col + ':' + r)) r++;
-      occupied.add(col + ':' + r);
-      s.col = col;
-      s.row = r;
-      s.x = PAD_X + col * COL_W;
-      s.y = HEADER_H + r * ROW_H;
-      maxRow = Math.max(maxRow, r);
-    });
+  let cursor = 0;
+  function place(n) {
+    if (!n.children.length) { n.ux = cursor; cursor += 1; return; }
+    n.children.forEach(place);
+    n.ux = (n.children[0].ux + n.children[n.children.length - 1].ux) / 2;
+  }
+  hubs.forEach((hb, i) => {
+    if (i > 0) cursor += BRANCH_GAP;
+    place(hb);
+  });
+  root.ux = (hubs[0].ux + hubs[hubs.length - 1].ux) / 2;
 
-  const CONTENT_W = PAD_X * 2 + (families.length - 1) * COL_W + NODE_W;
-  const CONTENT_H = HEADER_H + (maxRow + 1) * ROW_H + 20;
+  const CONTENT_W = MARGIN_X * 2 + (cursor - 1) * UNIT;
+  const CONTENT_H = MARGIN_TOP + (maxLevel - 1) * ROW + ROOT_DROP + MARGIN_BOTTOM;
+  nodeById.forEach(n => {
+    n.x = MARGIN_X + n.ux * UNIT;
+    n.y = n.kind === 'root'
+      ? MARGIN_TOP + (maxLevel - 1) * ROW + ROOT_DROP
+      : MARGIN_TOP + (maxLevel - n.level) * ROW;
+  });
 
   // ------------------------------------------------------------------
   // Progress (browser storage)
@@ -136,6 +189,12 @@
     progress: 'In progress',
     mastered: 'Mastered'
   };
+  function completion(list) {
+    let done = 0, total = 0;
+    list.forEach(s => { done += level(s.id); total += s.tiers.length; });
+    return { done, total, frac: total ? done / total : 0 };
+  }
+  const branchSkills = branch => skills.filter(s => s.branch === branch);
 
   // ------------------------------------------------------------------
   // DOM helpers
@@ -158,7 +217,7 @@
         else if (v !== false && v != null) e.setAttribute(k, v === true ? '' : v);
       });
     }
-    children.flat().forEach(c => {
+    children.flat(3).forEach(c => {
       if (c == null || c === false) return;
       e.appendChild(typeof c === 'string' || typeof c === 'number' ? document.createTextNode(String(c)) : c);
     });
@@ -167,7 +226,6 @@
 
   const svg = $('#tree');
   const viewportG = $('#viewport');
-  const bandsG = $('#bands');
   const edgesG = $('#edges');
   const nodesG = $('#nodes');
   const panel = $('#panel');
@@ -176,67 +234,73 @@
   let selectedId = null;
 
   // ------------------------------------------------------------------
-  // Static layer: column bands + headers
+  // Geometry helpers
   // ------------------------------------------------------------------
-  families.forEach(f => {
-    const x = PAD_X + f.index * COL_W;
-    svgEl('rect', {
-      class: 'band', x: x - 14, y: 8, width: NODE_W + 28, height: CONTENT_H - 8, rx: 14
-    }, bandsG);
-    const t = svgEl('text', { class: 'col-title', x: x + NODE_W / 2, y: 36, 'text-anchor': 'middle' }, bandsG);
-    t.textContent = f.name;
-    svgEl('line', {
-      class: 'col-rule', x1: x + NODE_W / 2 - 18, x2: x + NODE_W / 2 + 18, y1: 48, y2: 48, stroke: f.color
-    }, bandsG);
-  });
-
-  // ------------------------------------------------------------------
-  // Edges
-  // ------------------------------------------------------------------
-  function edgePath(a, b) {
-    const sameCol = a.col === b.col;
-    if (b.row > a.row) {
-      if (sameCol && b.row - a.row > 1) {
-        // Bow out to the right so the line doesn't run through nodes in between.
-        const x1 = a.x + NODE_W, y1 = a.y + NODE_H / 2;
-        const x2 = b.x + NODE_W, y2 = b.y + NODE_H / 2;
-        const bow = 30 + 6 * (b.row - a.row);
-        return `M${x1},${y1} C${x1 + bow},${y1} ${x2 + bow},${y2} ${x2},${y2}`;
-      }
-      const x1 = a.x + NODE_W / 2, y1 = a.y + NODE_H;
-      const x2 = b.x + NODE_W / 2, y2 = b.y;
-      const dy = Math.max(30, (y2 - y1) / 2);
-      return `M${x1},${y1} C${x1},${y1 + dy} ${x2},${y2 - dy} ${x2},${y2}`;
+  function curve(a, b) {
+    const dy = b.y - a.y;
+    if (dy < -1) {
+      const c = dy * 0.55;
+      return `M${a.x},${a.y} C${a.x},${a.y + c} ${b.x},${b.y - c} ${b.x},${b.y}`;
     }
-    // Same row or upward (only carryover links): connect the facing sides.
-    const leftToRight = a.x < b.x;
-    const x1 = leftToRight ? a.x + NODE_W : a.x;
-    const x2 = leftToRight ? b.x : b.x + NODE_W;
-    const y1 = a.y + NODE_H / 2, y2 = b.y + NODE_H / 2;
-    if (sameCol) {
-      const bx = a.x - 36;
-      return `M${a.x},${y1} C${bx},${y1} ${bx},${y2} ${b.x},${y2}`;
-    }
-    const dx = (x2 - x1) / 2;
-    return `M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}`;
+    // Same height or downward (cross-links/carryover only): arc over the top.
+    const lift = 46 + Math.abs(dy) * 0.25;
+    const dx = (b.x - a.x) / 3;
+    return `M${a.x},${a.y} C${a.x + dx},${a.y - lift} ${b.x - dx},${b.y - lift} ${b.x},${b.y}`;
+  }
+  function polar(r, deg) {
+    const a = (deg - 90) * Math.PI / 180;
+    return [r * Math.cos(a), r * Math.sin(a)];
+  }
+  function arcPath(r, a0, a1) {
+    const [x0, y0] = polar(r, a0);
+    const [x1, y1] = polar(r, a1);
+    const large = a1 - a0 > 180 ? 1 : 0;
+    return `M${x0.toFixed(2)},${y0.toFixed(2)} A${r},${r} 0 ${large} 1 ${x1.toFixed(2)},${y1.toFixed(2)}`;
+  }
+  function wrapLabel(text, max) {
+    const words = text.split(' ');
+    const lines = [];
+    let line = '';
+    words.forEach(w => {
+      if (line && (line + ' ' + w).length > max) { lines.push(line); line = w; }
+      else line = line ? line + ' ' + w : w;
+    });
+    if (line) lines.push(line);
+    return lines;
   }
 
   // ------------------------------------------------------------------
   // Selection relationships
   // ------------------------------------------------------------------
-  function ancestors(s, out) {
-    s.requires.forEach(([pid]) => {
-      if (!out.has(pid)) { out.add(pid); ancestors(byId.get(pid), out); }
+  // `path`: nodes whose connecting edges get highlighted (the route to the
+  // selection). `nodes`: everything left undimmed (path + direct neighbours).
+  function relatedSets(id) {
+    const path = new Set();
+    if (!id) return { path, nodes: path };
+    const n = nodeById.get(id);
+    path.add(id);
+    if (n.kind === 'hub') {
+      path.add(ROOT_ID);
+      skills.forEach(s => { if (s.branch === n.branch) path.add(s.id); });
+      return { path, nodes: path };
+    }
+    // Skill: every prerequisite, recursively, plus their route down to Start.
+    const stack = [n];
+    while (stack.length) {
+      const s = stack.pop();
+      s.requires.forEach(([pid]) => {
+        if (!path.has(pid)) { path.add(pid); stack.push(byId.get(pid)); }
+      });
+    }
+    [...path].forEach(sid => {
+      let p = nodeById.get(sid).parent;
+      while (p) { path.add(p.id); p = p.parent; }
     });
-    return out;
-  }
-  function relatedSets(s) {
-    const anc = ancestors(s, new Set());
-    const nodes = new Set([s.id, ...anc]);
-    s.unlocks.forEach(([id]) => nodes.add(id));
-    s.carry.forEach(id => nodes.add(id));
-    s.carriesTo.forEach(id => nodes.add(id));
-    return { anc, nodes };
+    const nodes = new Set(path);
+    n.unlocks.forEach(([uid]) => nodes.add(uid));
+    n.carry.forEach(cid => nodes.add(cid));
+    n.carriesTo.forEach(cid => nodes.add(cid));
+    return { path, nodes };
   }
 
   // ------------------------------------------------------------------
@@ -247,84 +311,176 @@
     nodesG.textContent = '';
     svg.classList.toggle('hide-carry', !prefs.showCarry);
 
-    const sel = selectedId ? byId.get(selectedId) : null;
-    const rel = sel ? relatedSets(sel) : null;
+    const sel = selectedId ? nodeById.get(selectedId) : null;
+    const rel = relatedSets(selectedId);
     svg.classList.toggle('has-selection', !!sel);
 
-    // Carry edges first so hard edges draw on top.
+    const edgeRelated = (a, b) => !!sel && (
+      a.id === selectedId || b.id === selectedId || (rel.path.has(a.id) && rel.path.has(b.id))
+    );
+
+    // 1. Carryover (dashed)
     skills.forEach(s => {
       s.carry.forEach(cid => {
         const from = byId.get(cid);
-        const related = sel && (s.id === sel.id || cid === sel.id);
         svgEl('path', {
-          class: 'edge carry' + (related ? ' related' : ''),
-          d: edgePath(from, s)
+          class: 'edge carry' + (edgeRelated(from, s) ? ' related' : ''),
+          d: curve(from, s)
         }, edgesG);
       });
     });
+    // 2. Cross-branch / secondary prerequisites (thin)
     skills.forEach(s => {
-      s.requires.forEach(req => {
+      s.crossReqs.forEach(req => {
         const from = byId.get(req[0]);
-        let related = false;
-        if (sel) {
-          related = (s.id === sel.id || rel.anc.has(s.id)) && (from.id === sel.id || rel.anc.has(from.id));
-          related = related || from.id === sel.id;
-        }
         svgEl('path', {
-          class: 'edge hard' + (prereqMet(req) ? ' met' : '') + (related ? ' related' : ''),
-          d: edgePath(from, s)
+          class: 'edge cross' + (prereqMet(req) ? ' met' : '') + (edgeRelated(from, s) ? ' related' : ''),
+          d: curve(from, s)
         }, edgesG);
       });
     });
+    // 3. Tree branches (thick, branch colour)
+    nodeById.forEach(n => {
+      if (!n.parent) return;
+      const lit = n.kind === 'hub' ? true : status(n) !== 'locked';
+      svgEl('path', {
+        class: `edge tree ${n.kind === 'hub' ? 'trunk' : ''}` + (lit ? ' lit' : '') +
+          (edgeRelated(n.parent, n) ? ' related' : ''),
+        d: curve(n.parent, n),
+        stroke: n.color
+      }, edgesG);
+    });
 
-    skills.forEach(s => {
-      const st = status(s);
-      const lv = level(s.id);
-      const fam = famById.get(s.family);
-      const classes = ['node', st];
-      if (sel && rel.nodes.has(s.id)) classes.push('related');
-      if (s.id === selectedId) classes.push('selected');
+    // 4. Nodes
+    drawNode(root, rel, sel);
+    hubs.forEach(hb => drawNode(hb, rel, sel));
+    skills.forEach(s => drawNode(s, rel, sel));
+  }
 
-      const g = svgEl('g', {
-        class: classes.join(' '),
-        transform: `translate(${s.x},${s.y})`,
-        tabindex: 0,
-        role: 'button',
-        'data-id': s.id,
-        'aria-label': `${s.name}: ${STATUS_TEXT[st]}, level ${lv} of ${s.tiers.length}`
-      }, nodesG);
-      svgEl('title', null, g).textContent = s.name;
-      svgEl('rect', { class: 'node-bg', width: NODE_W, height: NODE_H, rx: 10 }, g);
-      svgEl('rect', { x: 7, y: 11, width: 4, height: NODE_H - 22, rx: 2, fill: fam.color }, g);
-      svgEl('text', { class: 'node-name', x: 20, y: 25 }, g).textContent = s.name;
-      s.tiers.forEach((_, i) => {
-        svgEl('circle', { class: 'pip' + (i < lv ? ' done' : ''), cx: 25 + i * 15, cy: 42, r: 4.5 }, g);
-      });
-      const meta = st === 'locked' ? 'locked' : st === 'mastered' ? 'mastered' : `${lv}/${s.tiers.length}`;
-      svgEl('text', { class: 'node-meta', x: NODE_W - 12, y: 46, 'text-anchor': 'end' }, g).textContent = meta;
+  function drawRing(g, r, frac, color) {
+    const rr = r + RING_GAP + RING_W / 2;
+    svgEl('circle', { class: 'ring-track', r: rr, 'stroke-width': RING_W }, g);
+    if (frac >= 0.999) {
+      svgEl('circle', { class: 'ring-fill', r: rr, 'stroke-width': RING_W, stroke: color }, g);
+    } else if (frac > 0) {
+      svgEl('path', { class: 'ring-fill', d: arcPath(rr, 0, 360 * frac), 'stroke-width': RING_W, stroke: color }, g);
+    }
+  }
+
+  function drawSegments(g, r, n, done, color) {
+    const rr = r + RING_GAP + RING_W / 2;
+    if (n === 1) {
+      svgEl('circle', { class: done ? 'ring-fill' : 'ring-track', r: rr, 'stroke-width': RING_W, stroke: done ? color : null }, g);
+      return;
+    }
+    const seg = 360 / n;
+    const gap = 16;
+    for (let i = 0; i < n; i++) {
+      const isDone = i < done;
+      const attrs = {
+        class: isDone ? 'ring-fill' : 'ring-track',
+        d: arcPath(rr, i * seg + gap / 2, (i + 1) * seg - gap / 2),
+        'stroke-width': RING_W
+      };
+      if (isDone) attrs.stroke = color;
+      svgEl('path', attrs, g);
+    }
+  }
+
+  function drawLabel(g, text, y, max) {
+    const lines = wrapLabel(text, max);
+    const t = svgEl('text', { class: 'label', y, 'text-anchor': 'middle' }, g);
+    lines.forEach((ln, i) => {
+      const ts = svgEl('tspan', { x: 0, dy: i === 0 ? 0 : 14 }, t);
+      ts.textContent = ln;
     });
   }
 
-  // ------------------------------------------------------------------
-  // Render side panel
-  // ------------------------------------------------------------------
-  function tierLabel(id, t) { return byId.get(id).tiers[t - 1]; }
+  function drawNode(n, rel, sel) {
+    const classes = ['node', n.kind];
+    let st = null;
+    if (n.kind === 'skill') { st = status(n); classes.push(st); }
+    if (sel && rel.nodes.has(n.id)) classes.push('related');
+    if (n.id === selectedId) classes.push('selected');
 
+    const g = svgEl('g', {
+      class: classes.join(' '),
+      transform: `translate(${n.x},${n.y})`,
+      tabindex: 0,
+      role: 'button',
+      'data-id': n.id
+    }, nodesG);
+
+    const r = R[n.kind];
+
+    if (n.kind === 'root') {
+      const c = completion(skills);
+      g.setAttribute('aria-label', `${n.name}: ${Math.round(c.frac * 100)}% of all levels complete`);
+      svgEl('title', null, g).textContent = `${n.name}: overview`;
+      drawRing(g, r, c.frac, 'var(--accent)');
+      svgEl('circle', { class: 'disc', r }, g);
+      svgEl('text', { class: 'root-name', y: -2, 'text-anchor': 'middle' }, g).textContent = n.name;
+      svgEl('text', { class: 'root-pct', y: 15, 'text-anchor': 'middle' }, g).textContent = `${Math.round(c.frac * 100)}%`;
+      return;
+    }
+
+    if (n.kind === 'hub') {
+      const c = completion(branchSkills(n.branch));
+      g.setAttribute('aria-label', `${n.name} branch: ${Math.round(c.frac * 100)}% complete`);
+      svgEl('title', null, g).textContent = `${n.name} branch`;
+      drawRing(g, r, c.frac, n.color);
+      svgEl('circle', { class: 'disc', r, style: `fill:${n.color}` }, g);
+      svgEl('text', { class: 'hub-name', y: 5, 'text-anchor': 'middle' }, g).textContent = n.name;
+      return;
+    }
+
+    // Skill
+    const lv = level(n.id);
+    const total = n.tiers.length;
+    g.setAttribute('aria-label', `${n.name}: ${STATUS_TEXT[st]}, level ${lv} of ${total}`);
+    svgEl('title', null, g).textContent = n.name;
+    drawSegments(g, r, total, lv, n.color);
+
+    const disc = svgEl('circle', { class: 'disc', r }, g);
+    if (st === 'mastered') {
+      disc.style.fill = n.color;
+      svgEl('path', { class: 'glyph-check', d: 'M-9,0 L-3,6 L9,-7' }, g);
+    } else if (st === 'locked') {
+      svgEl('rect', { class: 'glyph-lock', x: -7, y: -2, width: 14, height: 11, rx: 2 }, g);
+      svgEl('path', { class: 'glyph-lock-shackle', d: 'M-4,-2 V-6 A4,4 0 0 1 4,-6 V-2' }, g);
+    } else {
+      disc.style.stroke = n.color;
+      if (st === 'progress') {
+        svgEl('circle', { class: 'disc-tint', r: r - 2, fill: n.color }, g);
+      }
+      svgEl('text', { class: 'level-text', y: 5, 'text-anchor': 'middle' }, g).textContent = `${lv}/${total}`;
+    }
+    drawLabel(g, n.name, r + RING_GAP + RING_W + 15, 15);
+  }
+
+  // ------------------------------------------------------------------
+  // Side panel
+  // ------------------------------------------------------------------
   function linkButton(id, mark, markOk, sub) {
-    const s = byId.get(id);
+    const n = nodeById.get(id);
     return h('li', null,
       h('button', { type: 'button', class: 'link', onclick: () => select(id, true) },
         h('span', { class: 'mark' + (markOk ? ' ok' : '') }, mark),
-        h('span', null, s.name),
+        h('span', null, n.name),
         sub ? h('span', { class: 'sub' }, sub) : null
       )
     );
   }
 
+  function progressBar(frac, color) {
+    return h('span', { class: 'bar' },
+      h('span', { class: 'bar-fill', style: `width:${(frac * 100).toFixed(1)}%;background:${color}` }));
+  }
+
   function renderSkillPanel(s) {
     const st = status(s);
     const lv = level(s.id);
-    const fam = famById.get(s.family);
+    const hub = hubByBranch.get(s.branch);
 
     const tiers = s.tiers.map((label, i) => {
       const n = i + 1;
@@ -355,7 +511,8 @@
 
     return [
       h('div', { class: 'panel-head' },
-        h('span', { class: 'chip' }, h('span', { class: 'dot', style: `background:${fam.color}` }), fam.name),
+        h('button', { type: 'button', class: 'chip', onclick: () => select(hub.id, true) },
+          h('span', { class: 'dot', style: `background:${hub.color}` }), hub.name),
         h('button', { type: 'button', class: 'close', 'aria-label': 'Close', onclick: () => select(null) }, '×')
       ),
       h('h2', null, s.name),
@@ -374,7 +531,7 @@
       s.requires.length ? [
         h('h3', null, 'Requires'),
         h('ul', { class: 'links' }, s.requires.map(req =>
-          linkButton(req[0], prereqMet(req) ? '✓' : '○', prereqMet(req), tierLabel(req[0], req[1]))
+          linkButton(req[0], prereqMet(req) ? '✓' : '○', prereqMet(req), byId.get(req[0]).tiers[req[1] - 1])
         ))
       ] : null,
 
@@ -397,6 +554,42 @@
     ];
   }
 
+  function renderHubPanel(hb) {
+    const list = branchSkills(hb.branch).slice().sort((a, b) => a.level - b.level || a.x - b.x);
+    const c = completion(list);
+    const marks = { locked: '○', available: '○', progress: '◐', mastered: '●' };
+    return [
+      h('div', { class: 'panel-head' },
+        h('span', { class: 'chip' }, h('span', { class: 'dot', style: `background:${hb.color}` }), 'Branch'),
+        h('button', { type: 'button', class: 'close', 'aria-label': 'Close', onclick: () => select(null) }, '×')
+      ),
+      h('h2', null, hb.name),
+      hb.blurb ? h('p', { class: 'muted' }, hb.blurb) : null,
+      h('div', { class: 'branch-progress' },
+        progressBar(c.frac, hb.color),
+        h('span', { class: 'muted' }, `${c.done} / ${c.total} levels`)
+      ),
+      h('h3', null, 'Skills'),
+      h('ul', { class: 'links' }, list.map(s => {
+        const st = status(s);
+        const lv = level(s.id);
+        const sub = st === 'mastered' ? 'mastered' : st === 'locked' ? 'locked' : `next: ${s.tiers[lv]}`;
+        return linkButton(s.id, marks[st], st === 'progress' || st === 'mastered', sub);
+      }))
+    ];
+  }
+
+  function legendNode(cls, color) {
+    const g = [`<svg width="40" height="40" viewBox="-20 -20 40 40" aria-hidden="true"><g class="node skill ${cls}">`];
+    g.push(`<circle class="ring-track" r="16" stroke-width="4"/>`);
+    if (cls === 'progress') g.push(`<path class="ring-fill" d="${arcPath(16, 8, 112)}" stroke="${color}" stroke-width="4"/>`);
+    if (cls === 'mastered') g.push(`<circle class="ring-fill" r="16" stroke="${color}" stroke-width="4"/>`);
+    const style = cls === 'mastered' ? `fill:${color}` : cls === 'available' || cls === 'progress' ? `stroke:${color}` : '';
+    g.push(`<circle class="disc" r="11" style="${style}"/>`);
+    if (cls === 'progress') g.push(`<circle class="disc-tint" r="9" fill="${color}"/>`);
+    g.push('</g></svg>');
+    return g.join('');
+  }
   function legendRow(svgMarkup, text) {
     const holder = h('div');
     holder.innerHTML = svgMarkup;
@@ -409,17 +602,27 @@
         const st = status(s);
         return st === 'progress' || st === 'available';
       })
-      .sort((a, b) => (status(a) === 'progress' ? 0 : 1) - (status(b) === 'progress' ? 0 : 1) || a.row - b.row);
-
-    const nodeSwatch = cls =>
-      `<svg width="44" height="22" viewBox="0 0 44 22" class="${cls}" aria-hidden="true"><g class="node ${cls}"><rect class="node-bg" x="2" y="2" width="40" height="18" rx="5"/></g></svg>`;
-    const lineSwatch = cls =>
-      `<svg width="44" height="22" viewBox="0 0 44 22" aria-hidden="true"><path class="edge ${cls}" d="M2,11 H42"/></svg>`;
+      .sort((a, b) => (status(a) === 'progress' ? 0 : 1) - (status(b) === 'progress' ? 0 : 1) || a.level - b.level);
+    const demo = '#3b82d6';
+    const line = (cls, extra) =>
+      `<svg width="40" height="20" viewBox="0 0 40 20" aria-hidden="true"><path class="edge ${cls}" d="M2,10 H38" ${extra || ''}/></svg>`;
 
     return [
-      h('h2', null, 'Your progressions'),
+      h('h2', null, 'Your skill tree'),
       h('p', { class: 'muted' },
-        'Each skill has levels. The first is the bare minimum ("can do it"); the rest are the reps or holds that build toward the next skill. Click a skill to log your level and see what it leads to.'),
+        'The tree grows up from Start into five branches. Each skill has levels: the first is the bare minimum ("can do it"), the rest are the reps or holds that build toward the next skill. Click any circle to log your level.'),
+
+      h('h3', null, 'Branches'),
+      h('ul', { class: 'branches' }, hubs.map(hb => {
+        const c = completion(branchSkills(hb.branch));
+        return h('li', null,
+          h('button', { type: 'button', class: 'branch-row', onclick: () => select(hb.id, true) },
+            h('span', { class: 'branch-name' }, h('span', { class: 'dot', style: `background:${hb.color}` }), hb.name),
+            progressBar(c.frac, hb.color),
+            h('span', { class: 'muted pct' }, `${Math.round(c.frac * 100)}%`)
+          )
+        );
+      })),
 
       h('h3', null, 'Up next'),
       upNext.length
@@ -431,13 +634,13 @@
 
       h('h3', null, 'Legend'),
       h('div', { class: 'legend' },
-        legendRow(nodeSwatch('locked'), 'Locked: prerequisites not met'),
-        legendRow(nodeSwatch('available'), 'Ready to start'),
-        legendRow(nodeSwatch('progress'), 'In progress'),
-        legendRow(nodeSwatch('mastered'), 'Mastered (all levels)'),
-        legendRow(lineSwatch('hard'), 'Prerequisite, not yet met'),
-        legendRow(lineSwatch('hard met'), 'Prerequisite met'),
-        legendRow(lineSwatch('carry'), 'Carryover: helps, not required')
+        legendRow(legendNode('locked', demo), 'Locked: prerequisites not met'),
+        legendRow(legendNode('available', demo), 'Ready to start'),
+        legendRow(legendNode('progress', demo), 'In progress: ring shows levels done'),
+        legendRow(legendNode('mastered', demo), 'Mastered: every level done'),
+        legendRow(line('tree lit', `stroke="${demo}"`), 'Branch: grows out of the skill below'),
+        legendRow(line('cross met'), 'Extra prerequisite, often from another branch'),
+        legendRow(line('carry'), 'Carryover: helps, not required')
       ),
       h('p', { class: 'muted', style: 'margin-top:16px;font-size:13px' },
         'Progress is saved in this browser only. Use Export to back it up or move it to another device.')
@@ -446,10 +649,13 @@
 
   function renderPanel(focusTier) {
     const scroll = panel.scrollTop;
-    const sel = selectedId ? byId.get(selectedId) : null;
+    const sel = selectedId ? nodeById.get(selectedId) : null;
     panel.textContent = '';
-    const content = sel ? renderSkillPanel(sel) : renderOverviewPanel();
-    content.flat(2).forEach(c => { if (c) panel.appendChild(c); });
+    let content;
+    if (!sel || sel.kind === 'root') content = renderOverviewPanel();
+    else if (sel.kind === 'hub') content = renderHubPanel(sel);
+    else content = renderSkillPanel(sel);
+    content.flat(3).forEach(c => { if (c) panel.appendChild(c); });
     if (focusTier) {
       panel.scrollTop = scroll;
       const btn = panel.querySelector(`.tier[data-tier="${focusTier}"]`);
@@ -503,9 +709,9 @@
   }
 
   function select(id, center) {
-    selectedId = id;
+    selectedId = id === ROOT_ID ? null : id;
     renderAll();
-    if (id && center) centerOn(byId.get(id));
+    if (id && center) centerOn(nodeById.get(id));
   }
 
   let toastTimer = null;
@@ -536,7 +742,7 @@
   function animateTo(target) {
     const from = { ...view };
     const t0 = performance.now();
-    const dur = 280;
+    const dur = 300;
     function step(now) {
       const p = Math.min(1, (now - t0) / dur);
       const e = 1 - Math.pow(1 - p, 3);
@@ -553,23 +759,25 @@
   function fit(animate) {
     const r = svg.getBoundingClientRect();
     const k = clamp(Math.min(r.width / CONTENT_W, r.height / CONTENT_H), MIN_K, 1);
-    const target = { k, x: (r.width - CONTENT_W * k) / 2, y: Math.max(0, (r.height - CONTENT_H * k) / 2) };
+    const target = { k, x: (r.width - CONTENT_W * k) / 2, y: (r.height - CONTENT_H * k) / 2 };
     if (animate) animateTo(target); else { view = target; applyView(); }
   }
+  // Start at the base of the tree: Start node centred at the bottom.
   function initialView() {
     const r = svg.getBoundingClientRect();
-    const k = clamp(r.width / CONTENT_W, 0.55, 1);
-    view = { k, x: Math.max(0, (r.width - CONTENT_W * k) / 2), y: 0 };
+    const fitK = Math.min(r.width / CONTENT_W, r.height / CONTENT_H);
+    const k = clamp(fitK, r.width < 600 ? 0.5 : 0.42, 1);
+    view = {
+      k,
+      x: r.width / 2 - root.x * k,
+      y: Math.min((r.height - CONTENT_H * k) / 2, r.height - (root.y + R.root + 40) * k)
+    };
     applyView();
   }
-  function centerOn(s) {
+  function centerOn(n) {
     const r = svg.getBoundingClientRect();
-    const k = Math.max(view.k, 0.7);
-    animateTo({
-      k,
-      x: r.width / 2 - (s.x + NODE_W / 2) * k,
-      y: r.height / 2 - (s.y + NODE_H / 2) * k
-    });
+    const k = Math.max(view.k, 0.75);
+    animateTo({ k, x: r.width / 2 - n.x * k, y: r.height / 2 - n.y * k });
   }
 
   const pointers = new Map();
@@ -644,7 +852,7 @@
       e.preventDefault();
       const id = node.getAttribute('data-id');
       select(id);
-      const again = nodesG.querySelector(`[data-id="${id}"]`);
+      const again = nodesG.querySelector(`[data-id="${CSS.escape(id)}"]`);
       if (again) again.focus({ preventScroll: true });
     }
   });
@@ -723,5 +931,17 @@
   // Boot
   // ------------------------------------------------------------------
   renderAll();
-  initialView();
+  // Position the view once the canvas actually has a size (it can be 0x0
+  // while the page is still being laid out or opened in a hidden tab).
+  let viewReady = false;
+  function tryInitialView() {
+    if (viewReady) return;
+    const r = svg.getBoundingClientRect();
+    if (r.width > 0 && r.height > 0) { viewReady = true; initialView(); }
+  }
+  tryInitialView();
+  if (!viewReady && 'ResizeObserver' in window) {
+    const ro = new ResizeObserver(() => { tryInitialView(); if (viewReady) ro.disconnect(); });
+    ro.observe(svg);
+  }
 })();
