@@ -11,7 +11,8 @@
   const BRANCH_GAP = 0.6;    // extra spacing between branches, in units
   const ROW = 116;           // vertical spacing per difficulty level
   const ROOT_DROP = 240;     // Start sits this far below the branch bases
-  const R = { skill: 25, hub: 36, root: 44 };
+  const R = { skill: 25, milestone: 31, hub: 36, root: 44 };
+  const GOLD = '#f2b200';
   const RING_GAP = 6;        // gap between disc and progress ring
   const RING_W = 6;          // progress ring thickness
   const MARGIN_X = 80;
@@ -257,6 +258,15 @@
     const large = a1 - a0 > 180 ? 1 : 0;
     return `M${x0.toFixed(2)},${y0.toFixed(2)} A${r},${r} 0 ${large} 1 ${x1.toFixed(2)},${y1.toFixed(2)}`;
   }
+  function starPath(outer) {
+    const inner = outer * 0.45;
+    const pts = [];
+    for (let i = 0; i < 10; i++) {
+      const [x, y] = polar(i % 2 ? inner : outer, i * 36);
+      pts.push(`${x.toFixed(2)},${y.toFixed(2)}`);
+    }
+    return 'M' + pts.join(' L') + ' Z';
+  }
   function wrapLabel(text, max) {
     const words = text.split(' ');
     const lines = [];
@@ -399,7 +409,12 @@
   function drawNode(n, rel, sel) {
     const classes = ['node', n.kind];
     let st = null;
-    if (n.kind === 'skill') { st = status(n); classes.push(st); }
+    if (n.kind === 'skill') {
+      st = status(n);
+      classes.push(st);
+      if (n.milestone) classes.push('milestone');
+      if (n.milestone && level(n.id) >= 1) classes.push('achieved');
+    }
     if (sel && rel.nodes.has(n.id)) classes.push('related');
     if (n.id === selectedId) classes.push('selected');
 
@@ -411,7 +426,7 @@
       'data-id': n.id
     }, nodesG);
 
-    const r = R[n.kind];
+    const r = n.milestone ? R.milestone : R[n.kind];
 
     if (n.kind === 'root') {
       const c = completion(skills);
@@ -437,19 +452,29 @@
     // Skill
     const lv = level(n.id);
     const total = n.tiers.length;
-    g.setAttribute('aria-label', `${n.name}: ${STATUS_TEXT[st]}, level ${lv} of ${total}`);
-    svgEl('title', null, g).textContent = n.name;
-    drawSegments(g, r, total, lv, n.color);
+    const achieved = n.milestone && lv >= 1;
+    g.setAttribute('aria-label',
+      `${n.name}${n.milestone ? (achieved ? ' (achievement unlocked)' : ' (milestone)') : ''}: ${STATUS_TEXT[st]}, level ${lv} of ${total}`);
+    svgEl('title', null, g).textContent = n.milestone ? `★ ${n.name}` : n.name;
+    if (n.milestone && !achieved) {
+      svgEl('circle', { class: 'ms-halo', r: r + RING_GAP + RING_W + 5 }, g);
+    }
+    drawSegments(g, r, total, lv, n.milestone ? GOLD : n.color);
 
     const disc = svgEl('circle', { class: 'disc', r }, g);
-    if (st === 'mastered') {
+    if (achieved) {
+      // Golden cover: the big skills turn gold as soon as you can do them.
+      disc.style.fill = 'url(#goldGrad)';
+      svgEl('path', { class: 'glyph-star', d: starPath(r * 0.52) }, g);
+    } else if (st === 'mastered') {
       disc.style.fill = n.color;
       svgEl('path', { class: 'glyph-check', d: 'M-9,0 L-3,6 L9,-7' }, g);
     } else if (st === 'locked') {
       svgEl('rect', { class: 'glyph-lock', x: -7, y: -2, width: 14, height: 11, rx: 2 }, g);
       svgEl('path', { class: 'glyph-lock-shackle', d: 'M-4,-2 V-6 A4,4 0 0 1 4,-6 V-2' }, g);
+      if (n.milestone) disc.style.stroke = GOLD;
     } else {
-      disc.style.stroke = n.color;
+      disc.style.stroke = n.milestone ? GOLD : n.color;
       if (st === 'progress') {
         svgEl('circle', { class: 'disc-tint', r: r - 2, fill: n.color }, g);
       }
@@ -465,7 +490,7 @@
     const n = nodeById.get(id);
     return h('li', null,
       h('button', { type: 'button', class: 'link', onclick: () => select(id, true) },
-        h('span', { class: 'mark' + (markOk ? ' ok' : '') }, mark),
+        h('span', { class: 'mark' + (markOk === true ? ' ok' : markOk ? ' ' + markOk : '') }, mark),
         h('span', null, n.name),
         sub ? h('span', { class: 'sub' }, sub) : null
       )
@@ -516,6 +541,10 @@
         h('button', { type: 'button', class: 'close', 'aria-label': 'Close', onclick: () => select(null) }, '×')
       ),
       h('h2', null, s.name),
+      s.milestone
+        ? h('div', { class: 'ms-badge' + (lv >= 1 ? ' got' : '') },
+          lv >= 1 ? '★ Achievement unlocked' : '☆ Milestone: turns gold when you can do it')
+        : null,
       h('div', { class: 'status-line' },
         h('strong', null, STATUS_TEXT[st]),
         nextTier ? ` · next: ${nextTier}` : ''
@@ -590,11 +619,46 @@
     g.push('</g></svg>');
     return g.join('');
   }
+  function legendMilestone(achieved) {
+    const parts = [`<svg width="40" height="40" viewBox="-20 -20 40 40" aria-hidden="true"><g class="node skill milestone ${achieved ? 'achieved progress' : 'available'}">`];
+    if (!achieved) parts.push('<circle class="ms-halo" r="18.5"/>');
+    parts.push(`<circle class="ring-track" r="15" stroke-width="3"/>`);
+    if (achieved) parts.push(`<path class="ring-fill" d="${arcPath(15, 8, 112)}" stroke="${GOLD}" stroke-width="3"/>`);
+    parts.push(`<circle class="disc" r="11" style="${achieved ? 'fill:url(#goldGrad)' : `stroke:${GOLD}`}"/>`);
+    if (achieved) parts.push(`<path class="glyph-star" d="${starPath(6)}"/>`);
+    parts.push('</g></svg>');
+    return parts.join('');
+  }
   function legendRow(svgMarkup, text) {
     const holder = h('div');
     holder.innerHTML = svgMarkup;
     return [holder.firstChild, h('span', null, text)];
   }
+
+  function achievementsSection() {
+    const ms = skills.filter(s => s.milestone);
+    const got = ms.filter(s => level(s.id) >= 1);
+    const sorted = ms.slice().sort((a, b) =>
+      (level(b.id) >= 1) - (level(a.id) >= 1) || a.level - b.level);
+    const details = h('details', { class: 'achievements' },
+      h('summary', null,
+        h('span', { class: 'ach-title' }, 'Achievements'),
+        h('span', { class: 'ach-count' }, `★ ${got.length} / ${ms.length}`)
+      ),
+      h('ul', { class: 'links' }, sorted.map(s => {
+        const lv = level(s.id);
+        const st = status(s);
+        const sub = lv >= 1
+          ? (st === 'mastered' ? 'mastered' : `level ${lv}/${s.tiers.length}`)
+          : st === 'locked' ? 'locked' : 'ready to start';
+        return linkButton(s.id, lv >= 1 ? '★' : '☆', lv >= 1 ? 'gold' : false, sub);
+      }))
+    );
+    if (achievementsOpen) details.open = true;
+    details.addEventListener('toggle', () => { achievementsOpen = details.open; });
+    return details;
+  }
+  let achievementsOpen = false;
 
   function renderOverviewPanel() {
     const upNext = skills
@@ -624,6 +688,8 @@
         );
       })),
 
+      achievementsSection(),
+
       h('h3', null, 'Up next'),
       upNext.length
         ? h('ul', { class: 'links' }, upNext.map(s => {
@@ -638,6 +704,8 @@
         legendRow(legendNode('available', demo), 'Ready to start'),
         legendRow(legendNode('progress', demo), 'In progress: ring shows levels done'),
         legendRow(legendNode('mastered', demo), 'Mastered: every level done'),
+        legendRow(legendMilestone(false), 'Milestone: a big skill to aim for'),
+        legendRow(legendMilestone(true), 'Achievement unlocked: you can do it'),
         legendRow(line('tree lit', `stroke="${demo}"`), 'Branch: grows out of the skill below'),
         legendRow(line('cross met'), 'Extra prerequisite, often from another branch'),
         legendRow(line('carry'), 'Carryover: helps, not required')
@@ -679,7 +747,10 @@
       h('strong', null, m), ' mastered · ',
       h('strong', null, p), ' in progress · ',
       h('strong', null, a), ' ready · ',
-      h('strong', null, skills.length), ' skills'
+      h('strong', null, skills.length), ' skills · ',
+      h('span', { class: 'stat-gold' }, '★ ',
+        h('strong', null, skills.filter(s => s.milestone && level(s.id) >= 1).length),
+        ` / ${skills.filter(s => s.milestone).length}`)
     );
   }
 
@@ -695,16 +766,21 @@
   function setLevel(s, newLevel, focusTier) {
     const before = new Set(skills.filter(isUnlocked).map(x => x.id));
     const wasMastered = status(s) === 'mastered';
+    const prevLevel = level(s.id);
     if (newLevel <= 0) delete progress[s.id];
     else progress[s.id] = Math.min(newLevel, s.tiers.length);
     saveProgress();
 
+    const msgs = [];
+    const achievement = s.milestone && prevLevel < 1 && level(s.id) >= 1;
+    if (achievement) msgs.push(`★ Achievement unlocked: ${s.name}`);
     const newlyUnlocked = skills.filter(x => isUnlocked(x) && !before.has(x.id) && x.requires.length);
     if (newlyUnlocked.length) {
-      toast('Unlocked: ' + newlyUnlocked.map(x => x.name).join(', '));
+      msgs.push('Unlocked: ' + newlyUnlocked.map(x => x.name).join(', '));
     } else if (!wasMastered && status(s) === 'mastered') {
-      toast(`${s.name} mastered`);
+      msgs.push(`${s.name} mastered`);
     }
+    if (msgs.length) toast(msgs.join(' · '), achievement);
     renderAll(focusTier);
   }
 
@@ -715,12 +791,13 @@
   }
 
   let toastTimer = null;
-  function toast(msg) {
+  function toast(msg, gold) {
     const t = $('#toast');
     t.textContent = msg;
+    t.classList.toggle('gold', !!gold);
     t.classList.add('show');
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => t.classList.remove('show'), 3200);
+    toastTimer = setTimeout(() => t.classList.remove('show'), gold ? 4500 : 3200);
   }
 
   // ------------------------------------------------------------------

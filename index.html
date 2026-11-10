@@ -24,6 +24,13 @@
   <main class="layout">
     <div class="canvas" id="canvas">
       <svg id="tree" xmlns="http://www.w3.org/2000/svg" aria-label="Skill tree">
+        <defs>
+          <linearGradient id="goldGrad" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#ffe680"/>
+            <stop offset="0.5" stop-color="#f5b800"/>
+            <stop offset="1" stop-color="#c98400"/>
+          </linearGradient>
+        </defs>
         <g id="viewport">
           <g id="edges"></g>
           <g id="nodes"></g>

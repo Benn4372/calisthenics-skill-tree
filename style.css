@@ -15,6 +15,9 @@
   --edge-cross-met: #6b6b70;
   --edge-carry: #b0aea6;
   --danger: #b42318;
+  --gold: #f2b200;
+  --gold-text: #8f6200;
+  --gold-soft: #fff4cc;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.06), 0 2px 8px rgba(0, 0, 0, 0.05);
   color-scheme: light;
 }
@@ -37,6 +40,8 @@
     --edge-cross-met: #a0a0a8;
     --edge-carry: #55555e;
     --danger: #f97066;
+    --gold-text: #f5c84a;
+    --gold-soft: #3a2f10;
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
     color-scheme: dark;
   }
@@ -59,6 +64,8 @@
   --edge-cross-met: #a0a0a8;
   --edge-carry: #55555e;
   --danger: #f97066;
+  --gold-text: #f5c84a;
+  --gold-soft: #3a2f10;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
   color-scheme: dark;
 }
@@ -193,6 +200,18 @@ button.danger { color: var(--danger); }
 .root-name { fill: var(--text); font-size: 15px; font-weight: 700; pointer-events: none; }
 .root-pct { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; pointer-events: none; }
 
+/* Milestones: gold outline while it's a goal, golden cover once achieved */
+.ms-halo { fill: none; stroke: var(--gold); stroke-width: 1.5; stroke-dasharray: 3 4; opacity: 0.75; }
+.node.milestone .label { fill: var(--gold-text); font-weight: 700; }
+.node.achieved .disc {
+  stroke: #b07800;
+  stroke-width: 2.5;
+  filter: drop-shadow(0 0 6px rgba(242, 178, 0, 0.55));
+}
+.node.achieved.mastered .disc { filter: drop-shadow(0 0 14px rgba(242, 178, 0, 0.95)); }
+.glyph-star { fill: #fffbe6; stroke: #a86f00; stroke-width: 1.5; stroke-linejoin: round; pointer-events: none; }
+.node.achieved:hover .disc { transform: scale(1.08); }
+
 .has-selection .node:not(.related) { opacity: 0.25; }
 
 /* ---------- Side panel ---------- */
@@ -295,6 +314,39 @@ span.chip { padding: 3px 0; }
 .link:hover { border-color: var(--border); }
 .link .mark { width: 18px; text-align: center; flex-shrink: 0; color: var(--muted); }
 .link .mark.ok { color: var(--accent); }
+.link .mark.gold { color: var(--gold); }
+
+.ms-badge {
+  display: inline-block;
+  margin: 4px 0 6px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--gold-text);
+  border: 1px dashed var(--gold);
+}
+.ms-badge.got { background: var(--gold-soft); border-style: solid; }
+
+.achievements { margin-top: 20px; }
+.achievements summary {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  list-style: none;
+}
+.achievements summary::-webkit-details-marker { display: none; }
+.achievements summary::after { content: '▾'; color: var(--muted); margin-left: 8px; }
+.achievements[open] summary::after { content: '▴'; }
+.achievements[open] summary { margin-bottom: 6px; }
+.ach-title { font-weight: 600; }
+.ach-count { margin-left: auto; color: var(--gold-text); font-weight: 700; font-variant-numeric: tabular-nums; }
+.stat-gold { color: var(--gold-text); }
+.stat-gold strong { color: var(--gold-text); }
 .link .sub { color: var(--muted); font-size: 12.5px; margin-left: auto; text-align: right; }
 
 .bar {
@@ -342,6 +394,12 @@ span.chip { padding: 3px 0; }
   max-width: calc(100vw - 32px);
 }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
+.toast.gold {
+  background: linear-gradient(135deg, #ffe680, #f5b800 55%, #c98400);
+  color: #2b1d00;
+  font-weight: 600;
+  box-shadow: 0 0 24px rgba(242, 178, 0, 0.5);
+}
 
 /* ---------- Mobile ---------- */
 @media (max-width: 760px) {
