@@ -2,6 +2,8 @@
 
 An interactive skill tree for bodyweight training. It shows progressions within each skill family (push, pull, planche, front lever, back lever, handstand and more) and how the families feed into each other.
 
+**Live site:** https://benn4372.github.io/calisthenics-skill-tree/
+
 It's a static site with no build step and no dependencies, so it runs on GitHub Pages as-is.
 
 ## How it works
